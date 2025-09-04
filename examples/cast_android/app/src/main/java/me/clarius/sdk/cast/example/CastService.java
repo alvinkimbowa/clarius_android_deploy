@@ -26,24 +26,23 @@ import me.clarius.sdk.SpectralImageInfo;
 public class CastService extends Service {
     private static final String TAG = "Cast";
     private static final String NONE = "<none>";
+    
+    // Model configuration
+    // private static final String MODEL_ASSET_NAME = "nnunet_final.ptl";
+    private static final String MODEL_ASSET_NAME = "nnunet_xtiny_4_final.ptl";
+    
     private final MutableLiveData<Bitmap> processedImage = new MutableLiveData<>();
     private final MutableLiveData<Long> imageTime = new MutableLiveData<>();
     private final MutableLiveData<String> error = new MutableLiveData<>();
     private final MutableLiveData<Integer> rawDataProgress = new MutableLiveData<>();
     private final IBinder binder = new CastBinder();
     private final ExecutorService executorService = Executors.newFixedThreadPool(1);
-    private final ImageConverter converter = new ImageConverter(executorService, new ImageConverter.Callback() {
-        @Override
-        public void onResult(Bitmap bitmap, long timestamp) {
-            processedImage.postValue(bitmap);
-            imageTime.postValue(timestamp);
-        }
-
-        @Override
-        public void onError(Exception e) {
-            error.postValue(e.toString());
-        }
-    });
+    
+    // Create the model processor
+    private UltrasoundModelProcessor modelProcessor;
+    
+    private ImageConverter converter;
+    
     private final Cast.Listener listener = new Cast.Listener() {
 
         @Override
@@ -58,6 +57,8 @@ public class CastService extends Service {
 
         @Override
         public void newProcessedImage(ByteBuffer data, ProcessedImageInfo info, PosInfo[] pos) {
+            // Log image info from probe
+            Log.d(TAG, "New image from probe - Size: " + info.imageSize + " bytes, Width: " + info.width + ", Height: " + info.height + ", Format: " + info.format);
             converter.convertImage(data, info);
         }
 
@@ -92,6 +93,34 @@ public class CastService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        
+        // Initialize model processor
+        Log.i(TAG, "Initializing segmentation model processor...");
+        UltrasoundModelProcessor tempModelProcessor;
+        try {
+            tempModelProcessor = new UltrasoundModelProcessor(this, MODEL_ASSET_NAME);
+            Log.i(TAG, "Model processor created successfully");
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to create model processor", e);
+            // Create a null model processor to avoid crashes
+            tempModelProcessor = null;
+        }
+        modelProcessor = tempModelProcessor;
+        
+        // Initialize image converter with model processor
+        converter = new ImageConverter(executorService, new ImageConverter.Callback() {
+            @Override
+            public void onResult(Bitmap bitmap, long timestamp) {
+                processedImage.postValue(bitmap);
+                imageTime.postValue(timestamp);
+            }
+
+            @Override
+            public void onError(Exception e) {
+                error.postValue(e.toString());
+            }
+        }, modelProcessor);
+        
         if (cast == null) {
             Log.d(TAG, "Creating the Cast service");
             cast = new Cast(getApplicationContext().getApplicationInfo().nativeLibraryDir, listener);
@@ -107,6 +136,13 @@ public class CastService extends Service {
                 }
             });
         }
+        
+        // Log model loading status
+        if (modelProcessor != null && modelProcessor.isModelLoaded()) {
+            Log.i(TAG, "Segmentation model loaded successfully");
+        } else {
+            Log.w(TAG, "Segmentation model failed to load - images will be displayed without segmentation");
+        }
     }
 
     @Override
@@ -117,6 +153,11 @@ public class CastService extends Service {
             cast.disconnect(null);
             cast.release();
             cast = null;
+        }
+        
+        // Clean up model processor
+        if (modelProcessor != null) {
+            modelProcessor.close();
         }
     }
 
@@ -149,6 +190,10 @@ public class CastService extends Service {
 
         public MutableLiveData<Integer> getRawDataProgress() {
             return rawDataProgress;
+        }
+        
+        public boolean isModelLoaded() {
+            return modelProcessor != null && modelProcessor.isModelLoaded();
         }
     }
 }
