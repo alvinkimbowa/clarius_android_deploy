@@ -47,6 +47,7 @@ public class UltrasoundModelProcessor {
     private int debugImageCounter = 0;
 
     private final Object loadLock = new Object(); // For synchronizing lazy load
+    private final Object modelLock = new Object(); // For synchronizing model access
     private final Context context;
     private final String modelNameInAssets;
     private String modelPath; // Computed lazily
@@ -86,11 +87,13 @@ public class UltrasoundModelProcessor {
         }
         Log.i(TAG, "Model file exists at path, size: " + modelFile.length() + " bytes");
         
-        // Load the model
+        // Load the model (thread-safe)
         Log.i(TAG, "Attempting to load model with Module.load()...");
-        model = Module.load(modelPath);
+        synchronized (modelLock) {
+            model = Module.load(modelPath);
+            modelLoaded = true;
+        }
         Log.i(TAG, "Module.load() completed successfully");
-        modelLoaded = true;
         Log.i(TAG, "ExecuTorch model loaded successfully: " + modelNameInAssets);
 
         // Log model information for debugging (no dummy inference)
@@ -134,10 +137,18 @@ public class UltrasoundModelProcessor {
 
             long inferenceStartTime = System.currentTimeMillis();
 
-            // 3. Model inference using ExecuTorch API
+            // 3. Model inference using ExecuTorch API (thread-safe)
             Log.d(TAG, "Running model inference (ExecuTorch)...");
-            EValue[] out = model.forward(EValue.from(inputTensor));
-            Tensor outputTensor = out[0].toTensor();
+            EValue[] out;
+            Tensor outputTensor;
+            synchronized (modelLock) {
+                if (model == null) {
+                    Log.w(TAG, "Model is null during inference, returning original image");
+                    return originalBitmap;
+                }
+                out = model.forward(EValue.from(inputTensor));
+                outputTensor = out[0].toTensor();
+            }
             
             long postProcessingStartTime = System.currentTimeMillis();
 
@@ -216,10 +227,12 @@ public class UltrasoundModelProcessor {
     }
 
     public void close() {
-        if (model != null) {
-            model.destroy();
-            model = null;
-            modelLoaded = false;
+        synchronized (modelLock) {
+            if (model != null) {
+                model.destroy();
+                model = null;
+                modelLoaded = false;
+            }
         }
         
         // Generate final timing report when closing
