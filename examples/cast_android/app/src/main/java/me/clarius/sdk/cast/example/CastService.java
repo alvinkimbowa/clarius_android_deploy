@@ -26,11 +26,6 @@ import me.clarius.sdk.SpectralImageInfo;
 public class CastService extends Service {
     private static final String TAG = "Cast";
     private static final String NONE = "<none>";
-    
-    // Model configuration
-    // private static final String MODEL_ASSET_NAME = "nnunet_final.ptl";
-    private static final String MODEL_ASSET_NAME = "nnunet_xtiny_4_final.ptl";
-    
     private final MutableLiveData<Bitmap> processedImage = new MutableLiveData<>();
     private final MutableLiveData<Long> imageTime = new MutableLiveData<>();
     private final MutableLiveData<String> error = new MutableLiveData<>();
@@ -38,7 +33,10 @@ public class CastService extends Service {
     private final IBinder binder = new CastBinder();
     private final ExecutorService executorService = Executors.newFixedThreadPool(1);
     
-    // Create the model processor
+    // Model configuration
+    // private static final String MODEL_ASSET_NAME = "nnunet_final.ptl";
+    // private static final String MODEL_ASSET_NAME = "nnunet_xtiny_2_final.pte";
+    private static final String MODEL_ASSET_NAME = "nnunet_xtiny_2_final.pte";
     private UltrasoundModelProcessor modelProcessor;
     
     private ImageConverter converter;

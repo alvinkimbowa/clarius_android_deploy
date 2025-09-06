@@ -7,9 +7,9 @@ import android.graphics.Color;
 import android.graphics.Paint;
 import android.util.Log;
 
-import org.pytorch.IValue;
-import org.pytorch.Module;
-import org.pytorch.Tensor;
+import org.pytorch.executorch.EValue;
+import org.pytorch.executorch.Module;
+import org.pytorch.executorch.Tensor;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -19,8 +19,6 @@ import java.io.OutputStream;
 import java.text.SimpleDateFormat;
 import java.util.Date;
 import java.util.Locale;
-
-
 
 public class UltrasoundModelProcessor {
 
@@ -35,6 +33,7 @@ public class UltrasoundModelProcessor {
 
     private Module model = null;
     private boolean modelLoaded = false;
+    private boolean loadAttempted = false;
     private long lastProcessingTime = 0;
     private static final long MIN_PROCESSING_INTERVAL = 100; // Process at most every 100ms
     
@@ -43,60 +42,51 @@ public class UltrasoundModelProcessor {
     private static final String DEBUG_IMAGE_DIR = "/storage/emulated/0/Download/clarius_debug/";
     private int debugImageCounter = 0;
 
+    private final Object loadLock = new Object(); // For synchronizing lazy load
+    private final Context context;
+    private final String modelNameInAssets;
+    private String modelPath; // Computed lazily
+
     public UltrasoundModelProcessor(Context context, String modelNameInAssets) {
-        Log.i(TAG, "Attempting to load model: " + modelNameInAssets);
+        this.context = context;
+        this.modelNameInAssets = modelNameInAssets;
+        // Do not load here; defer to processImage
+    }
+
+    private void loadModel() throws Exception {
+        Log.i(TAG, "Lazily loading model: " + modelNameInAssets);
         
-        // Skip PyTorch availability test to avoid crashes
-        Log.i(TAG, "Skipping PyTorch availability test, proceeding with model loading...");
-        
+        // First check if the asset exists
         try {
-            // First check if the asset exists
-            try {
-                context.getAssets().open(modelNameInAssets).close();
-                Log.i(TAG, "Model file exists in assets: " + modelNameInAssets);
-            } catch (IOException e) {
-                Log.e(TAG, "Model file not found in assets: " + modelNameInAssets, e);
-                modelLoaded = false;
-                return;
-            }
-            
-            // Try to load the model using Module.load() method
-            Log.i(TAG, "Loading model from assets...");
-            String modelPath = assetFilePath(context, modelNameInAssets);
-            Log.i(TAG, "Model path: " + modelPath);
-            
-            // Check if the copied file exists
-            java.io.File modelFile = new java.io.File(modelPath);
-            if (!modelFile.exists()) {
-                Log.e(TAG, "Model file does not exist at path: " + modelPath);
-                modelLoaded = false;
-                return;
-            }
-            Log.i(TAG, "Model file exists at path, size: " + modelFile.length() + " bytes");
-            
-            // Try to load the model
-            Log.i(TAG, "Attempting to load model with Module.load()...");
-            try {
-                model = Module.load(modelPath);
-                Log.i(TAG, "Module.load() completed successfully");
-                modelLoaded = true;
-                Log.i(TAG, "PyTorch Mobile model loaded successfully: " + modelNameInAssets);
-                
-                // Log model information for debugging
-                logModelInfo(modelNameInAssets, modelFile);
-            } catch (Exception e) {
-                Log.e(TAG, "Module.load() failed", e);
-                throw e; // Re-throw to be caught by outer try-catch
-            }
-        } catch (Exception e) {
-            Log.e(TAG, "Error loading PyTorch Mobile model: " + modelNameInAssets, e);
-            Log.e(TAG, "Exception type: " + e.getClass().getSimpleName());
-            Log.e(TAG, "Exception message: " + e.getMessage());
-            if (e.getCause() != null) {
-                Log.e(TAG, "Caused by: " + e.getCause().getClass().getSimpleName() + " - " + e.getCause().getMessage());
-            }
-            modelLoaded = false;
+            context.getAssets().open(modelNameInAssets).close();
+            Log.i(TAG, "Model file exists in assets: " + modelNameInAssets);
+        } catch (IOException e) {
+            Log.e(TAG, "Model file not found in assets: " + modelNameInAssets, e);
+            throw e;
         }
+        
+        // Copy to file path
+        Log.i(TAG, "Loading model from assets...");
+        modelPath = assetFilePath(context, modelNameInAssets);
+        Log.i(TAG, "Model path: " + modelPath);
+        
+        // Check if the copied file exists
+        java.io.File modelFile = new java.io.File(modelPath);
+        if (!modelFile.exists()) {
+            Log.e(TAG, "Model file does not exist at path: " + modelPath);
+            throw new IOException("Model file does not exist");
+        }
+        Log.i(TAG, "Model file exists at path, size: " + modelFile.length() + " bytes");
+        
+        // Load the model
+        Log.i(TAG, "Attempting to load model with Module.load()...");
+        model = Module.load(modelPath);
+        Log.i(TAG, "Module.load() completed successfully");
+        modelLoaded = true;
+        Log.i(TAG, "ExecuTorch model loaded successfully: " + modelNameInAssets);
+
+        // Log model information for debugging (no dummy inference)
+        logModelInfo(modelNameInAssets, modelFile);
     }
 
     public boolean isModelLoaded() {
@@ -106,6 +96,17 @@ public class UltrasoundModelProcessor {
     public Bitmap processImage(Bitmap originalBitmap) {
         Log.d(TAG, "processImage called - originalBitmap: " + (originalBitmap != null) + ", modelLoaded: " + isModelLoaded());
         
+        synchronized (loadLock) {
+            if (!isModelLoaded() && !loadAttempted) {
+                loadAttempted = true;
+                try {
+                    loadModel();
+                } catch (Exception e) {
+                    Log.e(TAG, "Failed to lazily load model", e);
+                }
+            }
+        }
+        
         if (!isModelLoaded() || originalBitmap == null) {
             Log.w(TAG, "Model not loaded or input bitmap is null. Returning original image.");
             return originalBitmap;
@@ -113,10 +114,6 @@ public class UltrasoundModelProcessor {
 
         // Throttle processing to avoid overwhelming the system
         long currentTime = System.currentTimeMillis();
-        // if (currentTime - lastProcessingTime < MIN_PROCESSING_INTERVAL) {
-        //     Log.d(TAG, "Skipping processing due to throttling");
-        //     return originalBitmap;
-        // }
         lastProcessingTime = currentTime;
 
         Log.d(TAG, "Starting image processing - input size: " + originalBitmap.getWidth() + "x" + originalBitmap.getHeight());
@@ -126,17 +123,13 @@ public class UltrasoundModelProcessor {
             // 1. Convert to grayscale, resize, and create tensor in one optimized step
             Bitmap resizedBitmap = Bitmap.createScaledBitmap(originalBitmap, MODEL_INPUT_WIDTH, MODEL_INPUT_HEIGHT, true);
             Tensor inputTensor = bitmapToDynamicZScoreTensorOptimized(resizedBitmap, MODEL_INPUT_WIDTH, MODEL_INPUT_HEIGHT);
-            
-            // // Save the tensor data as a debug image to compare with Jupyter notebook
-            // if (SAVE_DEBUG_IMAGES) {
-            //     saveTensorAsDebugImage(inputTensor, "tensor_input");
-            // }
 
             long inferenceStartTime = System.currentTimeMillis();
-            
-            // 3. Model inference
-            Log.d(TAG, "Running model inference...");
-            Tensor outputTensor = model.forward(IValue.from(inputTensor)).toTensor();
+
+            // 3. Model inference using ExecuTorch API
+            Log.d(TAG, "Running model inference (ExecuTorch)...");
+            EValue[] out = model.forward(EValue.from(inputTensor));
+            Tensor outputTensor = out[0].toTensor();
             
             long postProcessingStartTime = System.currentTimeMillis();
 
@@ -153,11 +146,6 @@ public class UltrasoundModelProcessor {
             // 5. Scale mask to original image size and overlay
             Bitmap scaledMaskBitmap = Bitmap.createScaledBitmap(maskBitmap, originalBitmap.getWidth(), originalBitmap.getHeight(), true);
             Bitmap finalBitmap = overlaySegmentation(originalBitmap, scaledMaskBitmap);
-            
-            // // Save final segmentation result
-            // if (SAVE_DEBUG_IMAGES) {
-            //     saveDebugImage(finalBitmap, "segmentation_result");
-            // }
 
             long endTime = System.currentTimeMillis();
             Log.d(TAG, "Post-processing time: " + (endTime - postProcessingStartTime) + "ms");
@@ -257,7 +245,7 @@ public class UltrasoundModelProcessor {
     }
     
     // Helper method to extract prediction labels for analysis
-    private int[] getPredictionLabels(org.pytorch.Tensor outputTensor) {
+    private int[] getPredictionLabels(org.pytorch.executorch.Tensor outputTensor) {
         try {
             // Try to get as float array first (in case it's actually float)
             float[] floatData = outputTensor.getDataAsFloatArray();
@@ -283,7 +271,7 @@ public class UltrasoundModelProcessor {
     }
 
     // Convert argmax output tensor -> mask Bitmap (label 0 -> transparent)
-    private Bitmap maskFromArgmaxOutput(org.pytorch.Tensor outputTensor) {
+    private Bitmap maskFromArgmaxOutput(org.pytorch.executorch.Tensor outputTensor) {
         long[] shape = outputTensor.shape();
         int outH, outW;
         if (shape.length == 4) {
@@ -355,19 +343,6 @@ public class UltrasoundModelProcessor {
         Log.d(TAG, "Model name: " + modelName);
         Log.d(TAG, "Model file size: " + modelFile.length() + " bytes");
         Log.d(TAG, "Model file path: " + modelFile.getAbsolutePath());
-        
-        // Try to get model information if possible
-        try {
-            // Create a dummy input to test the model
-            Tensor dummyInput = Tensor.fromBlob(new float[1 * 1 * MODEL_INPUT_HEIGHT * MODEL_INPUT_WIDTH], 
-                                              new long[]{1, 1, MODEL_INPUT_HEIGHT, MODEL_INPUT_WIDTH});
-            Tensor dummyOutput = model.forward(IValue.from(dummyInput)).toTensor();
-            Log.d(TAG, "Model input shape: [1, 1, " + MODEL_INPUT_HEIGHT + ", " + MODEL_INPUT_WIDTH + "]");
-            Log.d(TAG, "Model output shape: " + java.util.Arrays.toString(dummyOutput.shape()));
-            Log.d(TAG, "Model output dtype: " + dummyOutput.dtype());
-        } catch (Exception e) {
-            Log.w(TAG, "Could not get model info: " + e.getMessage());
-        }
         Log.d(TAG, "==================");
     }
 }

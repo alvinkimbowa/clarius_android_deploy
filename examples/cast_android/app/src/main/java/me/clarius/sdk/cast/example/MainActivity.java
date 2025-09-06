@@ -28,8 +28,6 @@ public class MainActivity extends AppCompatActivity {
     private static final String TAG_MAIN_ACTIVITY = "MainActivity";
     private ImageView ultrasoundImageView;
     private UltrasoundModelProcessor modelProcessor;
-    // private static final String MODEL_ASSET_NAME = "nnunet_final.ptl";
-    private static final String MODEL_ASSET_NAME = "nnunet_xtiny_4_final.ptl";
     private ExecutorService executorService;
     private Handler mainThreadHandler;
 
@@ -48,8 +46,6 @@ public class MainActivity extends AppCompatActivity {
 
         executorService = Executors.newSingleThreadExecutor();
         mainThreadHandler = new Handler(Looper.getMainLooper());
-
-        modelProcessor = new UltrasoundModelProcessor(this, MODEL_ASSET_NAME);
     }
 
     public void onNewUltrasoundImage(Bitmap ultrasoundBitmap) {

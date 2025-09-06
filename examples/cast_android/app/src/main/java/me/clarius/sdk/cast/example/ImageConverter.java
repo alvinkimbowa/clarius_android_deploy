@@ -36,10 +36,10 @@ public class ImageConverter {
                 Bitmap bitmap = convert(buffer, info);
                 Log.d(TAG, "Bitmap created - width: " + bitmap.getWidth() + ", height: " + bitmap.getHeight());
                 
-                // Process through segmentation model if available
+                // Process through segmentation model if available (always call processImage to trigger lazy load)
                 Log.d(TAG, "Checking model processor - modelProcessor: " + (modelProcessor != null) + ", isModelLoaded: " + (modelProcessor != null ? modelProcessor.isModelLoaded() : "N/A"));
                 
-                if (modelProcessor != null && modelProcessor.isModelLoaded()) {
+                if (modelProcessor != null) {
                     Log.d(TAG, "Processing image through segmentation model");
                     try {
                         Bitmap segmentedBitmap = modelProcessor.processImage(bitmap);
@@ -49,21 +49,18 @@ public class ImageConverter {
                             bitmap.recycle();
                             bitmap = segmentedBitmap;
                         } else if (segmentedBitmap == bitmap) {
-                            Log.d(TAG, "Segmentation processing returned original bitmap (no changes)");
+                            Log.d(TAG, "Segmentation processing returned original bitmap (no changes or skipped)");
                             // Don't recycle since it's the same bitmap
                         } else {
-                            Log.w(TAG, "Segmentation processing returned null bitmap");
+                            Log.w(TAG, "Segmentation processing returned null bitmap, using original");
+                            // Keep the original bitmap if segmentation returns null
                         }
                     } catch (Exception e) {
                         Log.e(TAG, "Error processing image with segmentation model", e);
                         // Continue with original image if segmentation fails
                     }
                 } else {
-                    if (modelProcessor == null) {
-                        Log.w(TAG, "Model processor is null - skipping segmentation");
-                    } else if (!modelProcessor.isModelLoaded()) {
-                        Log.w(TAG, "Model is not loaded - skipping segmentation");
-                    }
+                    Log.w(TAG, "Model processor is null - skipping segmentation");
                 }
 
                 callback.onResult(bitmap, info.tm);

@@ -24,10 +24,9 @@ android {
     }
     packagingOptions {
         jniLibs {
-            // required to load qt plugins because qt cannot find uncompressed shared libs in apk
             useLegacyPackaging = true
         }
-        // Handle duplicate native libraries from Clarius Cast SDK and PyTorch Android
+        // Keep these if you continue to include both ExecuTorch and PyTorch native libs.
         pickFirst '**/libc++_shared.so'
         pickFirst '**/libjsc.so'
         pickFirst '**/libpytorch_jni.so'
@@ -37,10 +36,9 @@ android {
 }
 
 dependencies {
-    implementation fileTree(dir: 'libs/cast-12.0.2-aar-android.arm64-v8a', include: 'cast-debug.aar')
+    implementation fileTree(dir: 'libs', include: 'cast-debug.aar')
+    implementation 'org.pytorch:executorch-android:0.7.0'
 
-    implementation 'org.pytorch:pytorch_android:2.1.0'
-    implementation 'org.pytorch:pytorch_android_torchvision:2.1.0'
     implementation 'androidx.appcompat:appcompat:1.7.0'
     implementation 'com.google.android.material:material:1.12.0'
     implementation 'androidx.constraintlayout:constraintlayout:2.2.0'
