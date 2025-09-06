@@ -11,6 +11,10 @@ import org.pytorch.executorch.EValue;
 import org.pytorch.executorch.Module;
 import org.pytorch.executorch.Tensor;
 
+// Import Java classes for timing analysis
+import me.clarius.sdk.cast.example.TimingAnalyzer;
+import me.clarius.sdk.cast.example.TimingAnalyzer.TimingAnalysis;
+
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -39,17 +43,21 @@ public class UltrasoundModelProcessor {
     
     // Debug image saving - only essential images
     private static final boolean SAVE_DEBUG_IMAGES = true;
-    private static final String DEBUG_IMAGE_DIR = "/storage/emulated/0/Download/clarius_debug/";
+    private static final String DEBUG_IMAGE_DIR = "/storage/emulated/0/Download/clarius_debug/images/";
     private int debugImageCounter = 0;
 
     private final Object loadLock = new Object(); // For synchronizing lazy load
     private final Context context;
     private final String modelNameInAssets;
     private String modelPath; // Computed lazily
+    
+    // Timing analysis for research purposes
+    private TimingAnalyzer timingAnalyzer;
 
     public UltrasoundModelProcessor(Context context, String modelNameInAssets) {
         this.context = context;
         this.modelNameInAssets = modelNameInAssets;
+        this.timingAnalyzer = new TimingAnalyzer(context, modelNameInAssets);
         // Do not load here; defer to processImage
     }
 
@@ -133,8 +141,9 @@ public class UltrasoundModelProcessor {
             
             long postProcessingStartTime = System.currentTimeMillis();
 
-            Log.d(TAG, "Prep time: " + (inferenceStartTime - startTime) + "ms");
-            Log.d(TAG, "Inference time: " + (postProcessingStartTime - inferenceStartTime) + "ms");
+            // Calculate timing values
+            long prepTime = inferenceStartTime - startTime;
+            long inferenceTime = postProcessingStartTime - inferenceStartTime;
             
             // Log output tensor information
             long[] outputShape = outputTensor.shape();
@@ -148,8 +157,18 @@ public class UltrasoundModelProcessor {
             Bitmap finalBitmap = overlaySegmentation(originalBitmap, scaledMaskBitmap);
 
             long endTime = System.currentTimeMillis();
-            Log.d(TAG, "Post-processing time: " + (endTime - postProcessingStartTime) + "ms");
-            Log.d(TAG, "Total processing time: " + (endTime - startTime) + "ms");
+            
+            // Calculate remaining timing values
+            long postProcessingTime = endTime - postProcessingStartTime;
+            long totalTime = endTime - startTime;
+            
+            Log.d(TAG, "Prep time: " + prepTime + "ms");
+            Log.d(TAG, "Inference time: " + inferenceTime + "ms");
+            Log.d(TAG, "Post-processing time: " + postProcessingTime + "ms");
+            Log.d(TAG, "Total processing time: " + totalTime + "ms");
+            
+            // Record timing data for analysis
+            timingAnalyzer.recordTiming(prepTime, inferenceTime, postProcessingTime, totalTime);
 
             // Clean up intermediate bitmaps (but NOT the original or final bitmaps)
             resizedBitmap.recycle();
@@ -202,6 +221,30 @@ public class UltrasoundModelProcessor {
             model = null;
             modelLoaded = false;
         }
+        
+        // Generate final timing report when closing
+        if (timingAnalyzer != null) {
+            timingAnalyzer.generateFinalReport();
+        }
+    }
+    
+    /**
+     * Generate timing analysis report (can be called manually for research)
+     */
+    public void generateTimingReport() {
+        if (timingAnalyzer != null) {
+            timingAnalyzer.generateFinalReport();
+        }
+    }
+    
+    /**
+     * Get current timing statistics (for real-time monitoring)
+     */
+    public TimingAnalysis getCurrentTimingStats() {
+        if (timingAnalyzer != null) {
+            return timingAnalyzer.getCurrentStats();
+        }
+        return null;
     }
 
     // Optimized: Build tensor [1,1,H,W] from Bitmap with grayscale conversion and z-score normalization
