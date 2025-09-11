@@ -56,13 +56,14 @@ public class UltrasoundModelProcessor {
                 loadModel();
             } catch (Exception e) {
                 Log.e(TAG, "Error loading model", e);
+                return originalBitmap;
             }
         }
 
-    if (model == null) {
-        Log.w(TAG, "Model is null during inference, returning original image");
-        return originalBitmap.copy(originalBitmap.getConfig(), true);
-    }
+        if (model == null) {
+            Log.w(TAG, "Model is null during inference, returning original image");
+            return originalBitmap.copy(originalBitmap.getConfig(), true);
+        }
 
         debugImageCounter++;
         // Save a sample original bitmap to the storage. Overwrite if it already exists
@@ -78,104 +79,74 @@ public class UltrasoundModelProcessor {
         if (debugImageCounter % SAVE_DEBUG_INTERVAL == 0) {
             saveDebugImage(resizedBitmap, "input");
         }
-        // check min max std of the input tensor
-        // check min max std of the input tensor
-        float[] inputData = inputTensor.getDataAsFloatArray();
-        if (inputData == null || inputData.length == 0) {
-            Log.w(TAG, "Input data is empty or null after tensor conversion.");
-        // Handle this case appropriately, maybe return or throw an error
-        } else {
-            float min = inputData[0];
-            float max = inputData[0];
-            float sum = 0;
-            for (float val : inputData) {
-                if (val < min) {
-                    min = val;
-                }
-                if (val > max) {
-                    max = val;
-                }
-                sum += val;
-            }
-            float mean = sum / inputData.length;
-            float sumSquaredDiff = 0;
-            for (float val : inputData) {
-                float diff = val - mean;
-                sumSquaredDiff += diff * diff;
-            }
-            float std = (float) Math.sqrt(sumSquaredDiff / inputData.length);
-            Log.d(TAG, "Input tensor min: " + min + ", max: " + max + ", std: " + std);
-        }
-
-
-        // 2. Model inference using ExecuTorch API
-        long inferenceStartTime = System.currentTimeMillis();
-        Log.d(TAG, "Running model inference (ExecuTorch)...");
         Log.d(TAG, "Input tensor shape: " + java.util.Arrays.toString(inputTensor.shape()));
+        
+        // 2. Model inference using ExecuTorch API
+        Log.d(TAG, "Running model inference (ExecuTorch)...");
+        long inferenceStartTime = System.currentTimeMillis();
         EValue[] outputs;
         Tensor outputTensor;
         synchronized (modelLock) {
             outputs = model.forward(EValue.from(inputTensor));
             outputTensor = outputs[0].toTensor();
         }
-        Log.d(TAG, "Output tensor shape: " + java.util.Arrays.toString(outputTensor.shape()));
         
         // 3. Post-process the output
-        // Convert argmax output tensor -> mask Bitmap (label 0 -> transparent)
         long postProcessingStartTime = System.currentTimeMillis();
-        Bitmap maskBitmap = maskFromArgmaxOutput(outputTensor);
-        // Compute mask alpha stats (non-transparent count) using proper getPixels overload
-        int nonTransparentCount = 0;
-        try {
-            int w = maskBitmap.getWidth();
-            int h = maskBitmap.getHeight();
-            int[] maskPixels = new int[w * h];
-            maskBitmap.getPixels(maskPixels, 0, w, 0, 0, w, h);
-            int minA = 255, maxA = 0;
-            for (int p : maskPixels) {
-                int a = (p >>> 24) & 0xFF;
-                if (a != 0) nonTransparentCount++;
-                if (a < minA) minA = a;
-                if (a > maxA) maxA = a;
-            }
-            Log.d(TAG, "Mask alpha min: " + minA + ", max: " + maxA + ", nonTransparent: " + nonTransparentCount + "/" + maskPixels.length);
-        } catch (Exception e) {
-            Log.w(TAG, "Failed to compute mask stats", e);
-        }
         
-        // If the pred is all zeros, reload the model
-        if (nonTransparentCount == 0) {
-            Log.w(TAG, "All predictions are zeros, reloading model");
+        long[] outputShape = outputTensor.shape();
+        Log.d(TAG, "Model output tensor shape: " + java.util.Arrays.toString(outputShape));
+
+        int[] labels = getPredictionLabels(outputTensor);
+        if (labels == null) {
+            Log.e(TAG, "Failed to extract prediction labels, returning original image");
+            return originalBitmap.copy(originalBitmap.getConfig(), true);
+        }        
+        // Check if all predictions are zeros (model corruption detection)
+        // TODO: Fix bug
+        // The app currently has a bug where proceeding segmentations become all zeros
+        // after an all zero prediction.
+        long sanityCheckStartTime = System.currentTimeMillis();
+        boolean allZeros = true;
+        for (int label : labels) {
+            if (label != 0) {
+                allZeros = false;
+                break;
+            }
+        }
+        if (allZeros) {
+            Log.w(TAG, "Model output is all zeros, reloading model");
             try {
                 loadModel();
             } catch (Exception e) {
                 Log.e(TAG, "Error reloading model", e);
             }
         }
-
+        
+        // Convert labels -> mask Bitmap (label 0 -> transparent)
+        long postProcessingContinuesTime = System.currentTimeMillis();
+        Bitmap maskBitmap = maskFromArgmaxOutput(labels, outputShape);
         // Scale mask to original image size and overlay
         Bitmap scaledMaskBitmap = Bitmap.createScaledBitmap(maskBitmap, originalBitmap.getWidth(), originalBitmap.getHeight(), true);
         Bitmap finalBitmap = overlaySegmentation(originalBitmap, scaledMaskBitmap);
         if (debugImageCounter % SAVE_DEBUG_INTERVAL == 0) {
             saveDebugImage(finalBitmap, "output");
         }
-
         long endTime = System.currentTimeMillis();
         Log.d(TAG, "Model forward completed");
 
         // Calculate timing values
         long prepTime = inferenceStartTime - startTime;
         long inferenceTime = postProcessingStartTime - inferenceStartTime;
-        long postProcessingTime = endTime - postProcessingStartTime;
+        long sanityCheckTime = postProcessingContinuesTime - sanityCheckStartTime;
+        long postProcessingTime = sanityCheckStartTime - postProcessingStartTime + postProcessingContinuesTime - endTime;
         long totalTime = endTime - startTime;
         // Log output tensor information
         Log.d(TAG, "Prep time: " + prepTime);
         Log.d(TAG, "Inference time: " + inferenceTime);
+        Log.d(TAG, "Sanity check time: " + sanityCheckTime);
         Log.d(TAG, "Post processing time: " + postProcessingTime);
         Log.d(TAG, "Total time: " + totalTime);
-        
-        long[] outputShape = outputTensor.shape();
-        Log.d(TAG, "Model output tensor shape: " + java.util.Arrays.toString(outputShape));
 
         return finalBitmap;
     }
@@ -251,9 +222,8 @@ public class UltrasoundModelProcessor {
         return Tensor.fromBlob(buf, new long[]{1, 1, modelH, modelW});
     }
 
-    // Convert argmax output tensor -> mask Bitmap (label 0 -> transparent)
-    private Bitmap maskFromArgmaxOutput(org.pytorch.executorch.Tensor outputTensor) {
-        long[] shape = outputTensor.shape();
+    // Convert labels -> mask Bitmap (label 0 -> transparent)
+    private Bitmap maskFromArgmaxOutput(int[] labels, long[] shape) {
         int outH, outW;
         if (shape.length == 4) {
             outH = (int) shape[2]; // [1,1,H,W] or [1,C,H,W] after argmax should be [1, H, W]
@@ -263,12 +233,6 @@ public class UltrasoundModelProcessor {
             outW = (int) shape[2];
         } else {
             throw new RuntimeException("Unexpected output shape: " + java.util.Arrays.toString(shape));
-        }
-
-        // Get prediction labels
-        int[] labels = getPredictionLabels(outputTensor);
-        if (labels == null) {
-            throw new RuntimeException("Failed to extract prediction labels");
         }
         
         int[] pixels = new int[outH * outW];
