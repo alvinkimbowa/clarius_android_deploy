@@ -45,9 +45,11 @@ public class UltrasoundModelProcessor {
     private Module model;
     private boolean modelLoaded = false;
     private final Object modelLock = new Object();
+    private final TimingAnalyzer timingAnalyzer;
 
     public UltrasoundModelProcessor(Context context) {
         this.context = context;
+        this.timingAnalyzer = new TimingAnalyzer(context, MODEL_ASSET_NAME);
     }
 
     public Bitmap processImage(Bitmap originalBitmap) {
@@ -106,7 +108,6 @@ public class UltrasoundModelProcessor {
         // TODO: Fix bug
         // The app currently has a bug where proceeding segmentations become all zeros
         // after an all zero prediction.
-        long sanityCheckStartTime = System.currentTimeMillis();
         boolean allZeros = true;
         for (int label : labels) {
             if (label != 0) {
@@ -124,7 +125,6 @@ public class UltrasoundModelProcessor {
         }
         
         // Convert labels -> mask Bitmap (label 0 -> transparent)
-        long postProcessingContinuesTime = System.currentTimeMillis();
         Bitmap maskBitmap = maskFromArgmaxOutput(labels, outputShape);
         // Scale mask to original image size and overlay
         Bitmap scaledMaskBitmap = Bitmap.createScaledBitmap(maskBitmap, originalBitmap.getWidth(), originalBitmap.getHeight(), true);
@@ -138,15 +138,15 @@ public class UltrasoundModelProcessor {
         // Calculate timing values
         long prepTime = inferenceStartTime - startTime;
         long inferenceTime = postProcessingStartTime - inferenceStartTime;
-        long sanityCheckTime = postProcessingContinuesTime - sanityCheckStartTime;
-        long postProcessingTime = sanityCheckStartTime - postProcessingStartTime + postProcessingContinuesTime - endTime;
+        long postProcessingTime = endTime - postProcessingStartTime;
         long totalTime = endTime - startTime;
         // Log output tensor information
         Log.d(TAG, "Prep time: " + prepTime);
         Log.d(TAG, "Inference time: " + inferenceTime);
-        Log.d(TAG, "Sanity check time: " + sanityCheckTime);
         Log.d(TAG, "Post processing time: " + postProcessingTime);
         Log.d(TAG, "Total time: " + totalTime);
+
+        timingAnalyzer.recordTiming(prepTime, inferenceTime, postProcessingTime, totalTime);
 
         return finalBitmap;
     }
