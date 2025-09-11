@@ -111,13 +111,15 @@ public class UltrasoundModelProcessor {
         // 2. Model inference using ExecuTorch API
         long inferenceStartTime = System.currentTimeMillis();
         Log.d(TAG, "Running model inference (ExecuTorch)...");
+        Log.d(TAG, "Input tensor shape: " + java.util.Arrays.toString(inputTensor.shape()));
         EValue[] outputs;
         Tensor outputTensor;
         synchronized (modelLock) {
             outputs = model.forward(EValue.from(inputTensor));
             outputTensor = outputs[0].toTensor();
         }
-
+        Log.d(TAG, "Output tensor shape: " + java.util.Arrays.toString(outputTensor.shape()));
+        
         // 3. Post-process the output
         // Convert argmax output tensor -> mask Bitmap (label 0 -> transparent)
         long postProcessingStartTime = System.currentTimeMillis();
@@ -162,9 +164,15 @@ public class UltrasoundModelProcessor {
         Log.d(TAG, "Model forward completed");
 
         // Calculate timing values
-        // Log output tensor information
         long prepTime = inferenceStartTime - startTime;
         long inferenceTime = postProcessingStartTime - inferenceStartTime;
+        long postProcessingTime = endTime - postProcessingStartTime;
+        long totalTime = endTime - startTime;
+        // Log output tensor information
+        Log.d(TAG, "Prep time: " + prepTime);
+        Log.d(TAG, "Inference time: " + inferenceTime);
+        Log.d(TAG, "Post processing time: " + postProcessingTime);
+        Log.d(TAG, "Total time: " + totalTime);
         
         long[] outputShape = outputTensor.shape();
         Log.d(TAG, "Model output tensor shape: " + java.util.Arrays.toString(outputShape));
