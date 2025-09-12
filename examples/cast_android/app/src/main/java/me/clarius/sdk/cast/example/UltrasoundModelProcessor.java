@@ -147,6 +147,11 @@ public class UltrasoundModelProcessor {
         Log.d(TAG, "Total time: " + totalTime);
 
         timingAnalyzer.recordTiming(prepTime, inferenceTime, postProcessingTime, totalTime);
+        
+        // Save CSV files periodically (every 100 frames)
+        if (debugImageCounter % 100 == 0) {
+            timingAnalyzer.saveToCSV();
+        }
 
         return finalBitmap;
     }
@@ -339,6 +344,16 @@ public class UltrasoundModelProcessor {
 
         } catch (Exception e) {
             Log.e(TAG, "Failed to save debug image: " + stage, e);
+        }
+    }
+    
+    /**
+     * Cleanup method to save final timing results
+     */
+    public void cleanup() {
+        if (timingAnalyzer != null) {
+            timingAnalyzer.saveToCSV();
+            Log.i(TAG, "Final timing results saved to CSV");
         }
     }
 

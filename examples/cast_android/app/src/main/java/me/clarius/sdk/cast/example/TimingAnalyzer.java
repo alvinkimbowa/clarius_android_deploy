@@ -70,7 +70,7 @@ public class TimingAnalyzer {
         
         // Save data periodically (every 10 samples) to avoid losing data
         if (sampleCount % 10 == 0) {
-            saveToFile();
+            saveToCSV();
         }
     }
     
@@ -124,7 +124,7 @@ public class TimingAnalyzer {
     }
     
     /**
-     * Save timing data to CSV file for further analysis
+     * Save timing data to CSV files (both per-frame and summary)
      */
     public void saveToCSV() {
         try {
@@ -133,12 +133,34 @@ public class TimingAnalyzer {
                 resultsDir.mkdirs();
             }
             
-            File csvFileObj = new File(resultsDir, csvFile);
-            FileWriter writer = new FileWriter(csvFileObj, true); // Append mode
+            // Save per-frame detailed results
+            savePerFrameCSV(resultsDir);
+            
+            // Save summary statistics
+            saveSummaryCSV(resultsDir);
+            
+            // Clear the data after saving to avoid duplicates
+            clearData();
+            
+            Log.i(TAG, "Timing data saved to CSV files in: " + resultsDir.getAbsolutePath());
+            
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to save timing data to CSV", e);
+        }
+    }
+    
+    /**
+     * Save detailed per-frame timing data to CSV
+     */
+    private void savePerFrameCSV(File resultsDir) {
+        try {
+            String baseFilename = csvFile.replace(".csv", "");
+            File perFrameFile = new File(resultsDir, baseFilename + "_perframe.csv");
+            FileWriter writer = new FileWriter(perFrameFile, true); // Append mode
             
             // Write header if file is empty
-            if (csvFileObj.length() == 0) {
-                writer.write("timestamp,prep_time_ms,inference_time_ms,post_processing_time_ms,total_time_ms\n");
+            if (perFrameFile.length() == 0) {
+                writer.write("timestamp,frame,prep_time_ms,inference_time_ms,post_processing_time_ms,total_time_ms\n");
             }
             
             // Write data
@@ -154,15 +176,72 @@ public class TimingAnalyzer {
                                  Math.min(postList.size(), totalList.size()));
             
             for (int i = 0; i < minSize; i++) {
-                writer.write(timestamp + "," + prepList.get(i) + "," + inferenceList.get(i) + 
+                writer.write(timestamp + "," + (i + 1) + "," + prepList.get(i) + "," + inferenceList.get(i) + 
                            "," + postList.get(i) + "," + totalList.get(i) + "\n");
             }
             
             writer.close();
-            Log.i(TAG, "Timing data saved to CSV: " + csvFileObj.getAbsolutePath());
+            Log.i(TAG, "Per-frame timing data saved to: " + perFrameFile.getAbsolutePath());
             
         } catch (IOException e) {
-            Log.e(TAG, "Failed to save timing data to CSV", e);
+            Log.e(TAG, "Failed to save per-frame timing data to CSV", e);
+        }
+    }
+    
+    /**
+     * Save summary statistics to CSV
+     */
+    private void saveSummaryCSV(File resultsDir) {
+        try {
+            String baseFilename = csvFile.replace(".csv", "");
+            File summaryFile = new File(resultsDir, baseFilename + "_summary.csv");
+            FileWriter writer = new FileWriter(summaryFile, true); // Append mode
+            
+            // Write header if file is empty
+            if (summaryFile.length() == 0) {
+                writer.write("timestamp,session_duration_ms,sample_count," +
+                           "prep_avg_ms,prep_min_ms,prep_max_ms,prep_stddev_ms," +
+                           "inference_avg_ms,inference_min_ms,inference_max_ms,inference_stddev_ms," +
+                           "post_avg_ms,post_min_ms,post_max_ms,post_stddev_ms," +
+                           "total_avg_ms,total_min_ms,total_max_ms,total_stddev_ms," +
+                           "prep_percent,inference_percent,post_percent,average_fps\n");
+            }
+            
+            // Write data
+            String timestamp = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.getDefault()).format(new Date());
+            
+            // Compute statistics
+            TimingAnalysis stats = getCurrentStats();
+            
+            // Calculate percentages
+            double avgTotal = stats.totalTime.average;
+            double prepPercentage = (stats.prepTime.average / avgTotal) * 100;
+            double inferencePercentage = (stats.inferenceTime.average / avgTotal) * 100;
+            double postPercentage = (stats.postProcessingTime.average / avgTotal) * 100;
+            double avgFPS = 1000.0 / avgTotal;
+            
+            // Write summary data
+            writer.write(String.format("%s,%d,%d," +
+                "%d,%d,%d,%.2f," +
+                "%d,%d,%d,%.2f," +
+                "%d,%d,%d,%.2f," +
+                "%d,%d,%d,%.2f," +
+                "%.1f,%.1f,%.1f,%.2f\n",
+                timestamp,
+                stats.sessionDuration,
+                stats.sampleCount,
+                stats.prepTime.average, stats.prepTime.min, stats.prepTime.max, stats.prepTime.standardDeviation,
+                stats.inferenceTime.average, stats.inferenceTime.min, stats.inferenceTime.max, stats.inferenceTime.standardDeviation,
+                stats.postProcessingTime.average, stats.postProcessingTime.min, stats.postProcessingTime.max, stats.postProcessingTime.standardDeviation,
+                stats.totalTime.average, stats.totalTime.min, stats.totalTime.max, stats.totalTime.standardDeviation,
+                prepPercentage, inferencePercentage, postPercentage, avgFPS
+            ));
+            
+            writer.close();
+            Log.i(TAG, "Summary timing data saved to: " + summaryFile.getAbsolutePath());
+            
+        } catch (IOException e) {
+            Log.e(TAG, "Failed to save summary timing data to CSV", e);
         }
     }
     
@@ -258,7 +337,6 @@ public class TimingAnalyzer {
      * Force save all data and generate final report
      */
     public void generateFinalReport() {
-        saveToFile();
         saveToCSV();
         Log.i(TAG, "Final timing report generated");
     }
