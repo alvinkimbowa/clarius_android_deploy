@@ -32,6 +32,7 @@ public class UltrasoundModelProcessor {
     private static final String MODEL_ASSET_NAME = "nnunet_xtiny_4_final.pte";
     private static final String DEBUG_IMAGE_DIR = "/storage/emulated/0/Download/clarius_debug/images/";
     private static final boolean SAVE_DEBUG_IMAGES = false;
+    private static final boolean ENABLE_TIMING_ANALYSIS = false;
     private static int debugImageCounter = 0;
     private static final int SAVE_DEBUG_INTERVAL = 10;
     // Model Configuration - matches your Python example
@@ -49,7 +50,7 @@ public class UltrasoundModelProcessor {
 
     public UltrasoundModelProcessor(Context context) {
         this.context = context;
-        this.timingAnalyzer = new TimingAnalyzer(context, MODEL_ASSET_NAME);
+        this.timingAnalyzer = ENABLE_TIMING_ANALYSIS ? new TimingAnalyzer(context, MODEL_ASSET_NAME) : null;
     }
 
     public Bitmap processImage(Bitmap originalBitmap) {
@@ -146,11 +147,14 @@ public class UltrasoundModelProcessor {
         Log.d(TAG, "Post processing time: " + postProcessingTime);
         Log.d(TAG, "Total time: " + totalTime);
 
-        timingAnalyzer.recordTiming(prepTime, inferenceTime, postProcessingTime, totalTime);
-        
-        // Save CSV files periodically (every 100 frames)
-        if (debugImageCounter % 100 == 0) {
-            timingAnalyzer.saveToCSV();
+        // Record timing data (only in debug builds)
+        if (ENABLE_TIMING_ANALYSIS && timingAnalyzer != null) {
+            timingAnalyzer.recordTiming(prepTime, inferenceTime, postProcessingTime, totalTime);
+            
+            // Save CSV files periodically (every 100 frames)
+            if (debugImageCounter % 100 == 0) {
+                timingAnalyzer.saveToCSV();
+            }
         }
 
         return finalBitmap;
@@ -351,7 +355,7 @@ public class UltrasoundModelProcessor {
      * Cleanup method to save final timing results
      */
     public void cleanup() {
-        if (timingAnalyzer != null) {
+        if (ENABLE_TIMING_ANALYSIS && timingAnalyzer != null) {
             timingAnalyzer.saveToCSV();
             Log.i(TAG, "Final timing results saved to CSV");
         }
