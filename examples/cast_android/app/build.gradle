@@ -12,6 +12,7 @@ android {
         versionName = '1.0'
 
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+        setProperty("archivesBaseName", "KneeUS-CatSeg-${versionName}")
     }
     buildTypes {
         release {
@@ -32,7 +33,10 @@ android {
 }
 
 dependencies {
-    implementation fileTree(dir: 'libs', include: 'cast-debug.aar')
+    // Use different AAR files for debug vs release
+    debugImplementation fileTree(dir: 'libs', include: 'cast-debug.aar')
+    releaseImplementation fileTree(dir: 'libs', include: 'cast-release.aar')
+    
     implementation 'org.pytorch:executorch-android:0.7.0'
     
     implementation 'androidx.appcompat:appcompat:1.7.0'
