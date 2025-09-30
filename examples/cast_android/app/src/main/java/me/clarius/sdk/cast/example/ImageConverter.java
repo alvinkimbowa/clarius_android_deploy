@@ -7,6 +7,7 @@ import android.util.Log;
 
 import java.nio.ByteBuffer;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import me.clarius.sdk.ImageFormat;
 import me.clarius.sdk.ProcessedImageInfo;
@@ -22,6 +23,7 @@ public class ImageConverter {
     private final Executor executor;
     private final Callback callback;
     private final UltrasoundModelProcessor modelProcessor;
+    private final AtomicBoolean inferBusy = new AtomicBoolean(false);
     
     ImageConverter(Context context, Executor executor, Callback callback) {
         this.executor = executor;
@@ -32,6 +34,12 @@ public class ImageConverter {
 
 
     public void convertImage(ByteBuffer buffer, ProcessedImageInfo info) {
+        // Non-blocking policy: if an inference is running, drop this frame
+        if (!inferBusy.compareAndSet(false, true)) {
+            Log.d(TAG, "Dropping frame: inference in progress");
+            return;
+        }
+
         executor.execute(() -> {
             try {
                 Log.d(TAG, "Starting image conversion - buffer size: " + buffer.capacity() + ", image size: " + info.imageSize);
@@ -40,6 +48,8 @@ public class ImageConverter {
                 callback.onResult(processedBitmap, info.tm);
             } catch (Exception e) {
                 callback.onError(e);
+            } finally {
+                inferBusy.set(false);
             }
         });
     }
