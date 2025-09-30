@@ -53,6 +53,129 @@ public class UltrasoundModelProcessor {
         this.timingAnalyzer = ENABLE_TIMING_ANALYSIS ? new TimingAnalyzer(context, MODEL_ASSET_NAME) : null;
     }
 
+    // Class to store crop coordinates for later padding
+    private static class CropCoordinates {
+        final int left, top, right, bottom;
+        final int originalWidth, originalHeight;
+        
+        CropCoordinates(int left, int top, int right, int bottom, int originalWidth, int originalHeight) {
+            this.left = left;
+            this.top = top;
+            this.right = right;
+            this.bottom = bottom;
+            this.originalWidth = originalWidth;
+            this.originalHeight = originalHeight;
+        }
+    }
+    
+    /**
+     * Efficiently crop image to remove zero padding and return crop coordinates
+     * @param bitmap Input bitmap (800x800 with zero padding)
+     * @return Array: [croppedBitmap, cropCoordinates]
+     */
+    private Object[] cropImageContent(Bitmap bitmap) {
+        int width = bitmap.getWidth();
+        int height = bitmap.getHeight();
+        
+        // Convert to pixel array for efficient processing
+        int[] pixels = new int[width * height];
+        bitmap.getPixels(pixels, 0, width, 0, 0, width, height);
+        
+        // Find top boundary (first non-zero row)
+        int top = 0;
+        for (int y = 0; y < height; y++) {
+            boolean hasNonZero = false;
+            for (int x = 0; x < width; x++) {
+                if (pixels[y * width + x] != 0) {
+                    hasNonZero = true;
+                    break;
+                }
+            }
+            if (hasNonZero) {
+                top = y;
+                break;
+            }
+        }
+        
+        // Find bottom boundary (last non-zero row)
+        int bottom = height - 1;
+        for (int y = height - 1; y >= 0; y--) {
+            boolean hasNonZero = false;
+            for (int x = 0; x < width; x++) {
+                if (pixels[y * width + x] != 0) {
+                    hasNonZero = true;
+                    break;
+                }
+            }
+            if (hasNonZero) {
+                bottom = y;
+                break;
+            }
+        }
+        
+        // Find left boundary (first non-zero column)
+        int left = 0;
+        for (int x = 0; x < width; x++) {
+            boolean hasNonZero = false;
+            for (int y = top; y <= bottom; y++) {
+                if (pixels[y * width + x] != 0) {
+                    hasNonZero = true;
+                    break;
+                }
+            }
+            if (hasNonZero) {
+                left = x;
+                break;
+            }
+        }
+        
+        // Find right boundary (last non-zero column)
+        int right = width - 1;
+        for (int x = width - 1; x >= 0; x--) {
+            boolean hasNonZero = false;
+            for (int y = top; y <= bottom; y++) {
+                if (pixels[y * width + x] != 0) {
+                    hasNonZero = true;
+                    break;
+                }
+            }
+            if (hasNonZero) {
+                right = x;
+                break;
+            }
+        }
+        
+        // Create cropped bitmap
+        int cropWidth = right - left + 1;
+        int cropHeight = bottom - top + 1;
+        Bitmap croppedBitmap = Bitmap.createBitmap(bitmap, left, top, cropWidth, cropHeight);
+        
+        // Store crop coordinates
+        CropCoordinates cropCoords = new CropCoordinates(left, top, right, bottom, width, height);
+        
+        return new Object[]{croppedBitmap, cropCoords};
+    }
+    
+    /**
+     * Pad segmentation mask back to original image size
+     * @param maskBitmap Cropped segmentation mask
+     * @param cropCoords Original crop coordinates
+     * @return Padded mask matching original image size
+     */
+    private Bitmap padMaskToOriginalSize(Bitmap maskBitmap, CropCoordinates cropCoords) {
+        // Create bitmap with original dimensions
+        Bitmap paddedMask = Bitmap.createBitmap(cropCoords.originalWidth, cropCoords.originalHeight, Bitmap.Config.ARGB_8888);
+        
+        // Fill with transparent (zero) pixels
+        paddedMask.eraseColor(Color.TRANSPARENT);
+        
+        // Draw the cropped mask at the original position
+        Canvas canvas = new Canvas(paddedMask);
+        canvas.drawBitmap(maskBitmap, cropCoords.left, cropCoords.top, null);
+        
+        return paddedMask;
+    }
+    
     public Bitmap processImage(Bitmap originalBitmap) {
         if (!modelLoaded) {
             try {
@@ -74,10 +197,17 @@ public class UltrasoundModelProcessor {
             saveDebugImage(originalBitmap, "original");
         }
 
-         // 1. Pre-process the image: Convert to grayscale, resize, and create tensor in one optimized step
+         // 1. Crop image to remove zero padding and remember coordinates
         Log.d(TAG, "Starting image processing - input size: " + originalBitmap.getWidth() + "x" + originalBitmap.getHeight());
         long startTime = System.currentTimeMillis();
-        Bitmap resizedBitmap = Bitmap.createScaledBitmap(originalBitmap, MODEL_INPUT_WIDTH, MODEL_INPUT_HEIGHT, true);
+        
+        // Crop the image to remove zero padding
+        Object[] cropResult = cropImageContent(originalBitmap);
+        Bitmap croppedBitmap = (Bitmap) cropResult[0];
+        CropCoordinates cropCoords = (CropCoordinates) cropResult[1];
+        
+        // 2. Resize cropped image for model input
+        Bitmap resizedBitmap = Bitmap.createScaledBitmap(croppedBitmap, MODEL_INPUT_WIDTH, MODEL_INPUT_HEIGHT, true);
         Tensor inputTensor = bitmapToDynamicZScoreTensorOptimized(resizedBitmap, MODEL_INPUT_WIDTH, MODEL_INPUT_HEIGHT);
         if (debugImageCounter % SAVE_DEBUG_INTERVAL == 0) {
             saveDebugImage(resizedBitmap, "input");
@@ -127,9 +257,15 @@ public class UltrasoundModelProcessor {
         
         // Convert labels -> mask Bitmap (label 0 -> transparent)
         Bitmap maskBitmap = maskFromArgmaxOutput(labels, outputShape);
-        // Scale mask to original image size and overlay
-        Bitmap scaledMaskBitmap = Bitmap.createScaledBitmap(maskBitmap, originalBitmap.getWidth(), originalBitmap.getHeight(), true);
-        Bitmap finalBitmap = overlaySegmentation(originalBitmap, scaledMaskBitmap);
+        
+        // Scale mask to cropped image size first
+        Bitmap scaledMaskBitmap = Bitmap.createScaledBitmap(maskBitmap, croppedBitmap.getWidth(), croppedBitmap.getHeight(), true);
+        
+        // Pad the mask back to original image size using crop coordinates
+        Bitmap paddedMaskBitmap = padMaskToOriginalSize(scaledMaskBitmap, cropCoords);
+        
+        // Overlay the padded mask on the original image
+        Bitmap finalBitmap = overlaySegmentation(originalBitmap, paddedMaskBitmap);
         if (debugImageCounter % SAVE_DEBUG_INTERVAL == 0) {
             saveDebugImage(finalBitmap, "output");
         }
