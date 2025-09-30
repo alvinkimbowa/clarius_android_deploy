@@ -27,6 +27,8 @@ public class CastService extends Service {
     private static final String TAG = "Cast";
     private static final String NONE = "<none>";
     private final MutableLiveData<Bitmap> processedImage = new MutableLiveData<>();
+    private volatile Bitmap lastMaskBitmap;
+    private volatile Bitmap lastOriginalBitmap;
     private final MutableLiveData<Long> imageTime = new MutableLiveData<>();
     private final MutableLiveData<String> error = new MutableLiveData<>();
     private final MutableLiveData<Integer> rawDataProgress = new MutableLiveData<>();
@@ -35,6 +37,9 @@ public class CastService extends Service {
     private final ImageConverter converter = new ImageConverter(this, executorService, new ImageConverter.Callback() {
         @Override
         public void onResult(Bitmap bitmap, long timestamp) {
+            // Pull latest mask and original from the converter's model processor
+            lastMaskBitmap = converter.getLastMask();
+            lastOriginalBitmap = converter.getLastOriginal();
             processedImage.postValue(bitmap);
             imageTime.postValue(timestamp);
         }
@@ -152,6 +157,14 @@ public class CastService extends Service {
 
         public MutableLiveData<Integer> getRawDataProgress() {
             return rawDataProgress;
+        }
+
+        public Bitmap getLastMask() {
+            return lastMaskBitmap;
+        }
+
+        public Bitmap getLastOriginal() {
+            return lastOriginalBitmap;
         }
     }
 }

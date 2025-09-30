@@ -45,6 +45,8 @@ public class ImageConverter {
                 Log.d(TAG, "Starting image conversion - buffer size: " + buffer.capacity() + ", image size: " + info.imageSize);
                 Bitmap bitmap = convert(buffer, info);
                 Bitmap processedBitmap = modelProcessor.processImage(bitmap);
+                // Update service caches for mask and original via binder is not directly available here,
+                // so expose getters through the model processor and let the service pull if needed.
                 callback.onResult(processedBitmap, info.tm);
             } catch (Exception e) {
                 callback.onError(e);
@@ -52,6 +54,14 @@ public class ImageConverter {
                 inferBusy.set(false);
             }
         });
+    }
+
+    public Bitmap getLastMask() {
+        return modelProcessor.getLastMask();
+    }
+
+    public Bitmap getLastOriginal() {
+        return modelProcessor.getLastOriginal();
     }
 
     private Bitmap convert(ByteBuffer buffer, ProcessedImageInfo info) {

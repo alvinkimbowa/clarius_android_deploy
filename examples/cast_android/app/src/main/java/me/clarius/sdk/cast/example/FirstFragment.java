@@ -4,6 +4,7 @@ import android.content.ComponentName;
 import android.content.Context;
 import android.content.Intent;
 import android.content.ServiceConnection;
+import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Bundle;
 import android.os.Handler;
@@ -194,19 +195,31 @@ public class FirstFragment extends Fragment {
     }
 
     private void doCapture() {
-        if (castBinder == null || timestamp == 0L) {
+        if (castBinder == null) {
             return;
         }
-        showMessage("Starting image capture");
-        castBinder.getCast().startCapture(timestamp, captureID -> {
-            Log.d(TAG, "Start capture got ID: " + captureID);
-            if (captureID < 0) {
-                return;
+        // Save both original image and mask-only segmentation, if available
+        Bitmap mask = castBinder.getLastMask();
+        Bitmap original = castBinder.getLastOriginal();
+        String ts = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"));
+        if (mask != null) {
+            try {
+                Uri uri = IOUtils.saveBitmapInPictures(mask, "mask", ts, requireContext());
+                showMessage("Saved mask: " + uri.getLastPathSegment());
+            } catch (IOException e) {
+                showError("Failed to save segmentation: " + e.getMessage());
             }
-            castBinder.getCast().finishCapture(captureID, result -> {
-                Log.d(TAG, "Finish capture got result: " + result);
-            });
-        });
+        }
+        if (original != null) {
+            try {
+                Uri uri = IOUtils.saveBitmapInPictures(original, "image", ts, requireContext());
+                showMessage("Saved image: " + uri.getLastPathSegment());
+            } catch (IOException e) {
+                showError("Failed to save image: " + e.getMessage());
+            }
+        } else {
+            showMessage("No image available yet");
+        }
     }
 
     private void setTimestamp(Long timestamp) {

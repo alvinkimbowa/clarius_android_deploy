@@ -29,7 +29,8 @@ import java.util.Locale;
 public class UltrasoundModelProcessor {
     // private static final String MODEL_ASSET_NAME = "nnunet_final.ptl";
     // private static final String MODEL_ASSET_NAME = "nnunet_xtiny_2_final.pte";
-    private static final String MODEL_ASSET_NAME = "nnunet_xtiny_4_final.pte";
+    private static final String MODEL_ASSET_NAME = "nnunet_xtiny_32_final.pte";
+    // private static final String MODEL_ASSET_NAME = "nnunet_baseline_final.pte";
     private static final String DEBUG_IMAGE_DIR = "/storage/emulated/0/Download/clarius_debug/images/";
     private static final boolean SAVE_DEBUG_IMAGES = false;
     private static final boolean ENABLE_TIMING_ANALYSIS = false;
@@ -47,6 +48,8 @@ public class UltrasoundModelProcessor {
     private boolean modelLoaded = false;
     private final Object modelLock = new Object();
     private final TimingAnalyzer timingAnalyzer;
+    private volatile Bitmap lastPaddedMaskBitmap;
+    private volatile Bitmap lastOriginalBitmap;
 
     public UltrasoundModelProcessor(Context context) {
         this.context = context;
@@ -289,6 +292,10 @@ public class UltrasoundModelProcessor {
         }
 
         debugImageCounter++;
+        // Cache the last original frame for capture saving
+        try {
+            lastOriginalBitmap = originalBitmap.copy(Bitmap.Config.ARGB_8888, false);
+        } catch (Exception ignored) {}
         // Save a sample original bitmap to the storage. Overwrite if it already exists
         if (debugImageCounter % SAVE_DEBUG_INTERVAL == 0) {
             saveDebugImage(originalBitmap, "original");
@@ -363,6 +370,8 @@ public class UltrasoundModelProcessor {
         
         // Pad the mask back to original image size using crop coordinates
         Bitmap paddedMaskBitmap = padMaskToOriginalSize(scaledMaskBitmap, cropCoords);
+        // Cache last padded mask for saving if needed
+        lastPaddedMaskBitmap = paddedMaskBitmap;
         
         // Overlay the padded mask on the original image
         Bitmap finalBitmap = overlaySegmentation(originalBitmap, paddedMaskBitmap);
@@ -394,6 +403,14 @@ public class UltrasoundModelProcessor {
         }
 
         return finalBitmap;
+    }
+
+    public Bitmap getLastMask() {
+        return lastPaddedMaskBitmap;
+    }
+
+    public Bitmap getLastOriginal() {
+        return lastOriginalBitmap;
     }
 
     private void loadModel() throws Exception {
