@@ -176,6 +176,103 @@ public class UltrasoundModelProcessor {
         return paddedMask;
     }
     
+    /**
+     * Extract the largest connected component from segmentation mask
+     * @param maskBitmap Input segmentation mask
+     * @return Mask with only the largest connected component
+     */
+    private Bitmap extractLargestComponent(Bitmap maskBitmap) {
+        int width = maskBitmap.getWidth();
+        int height = maskBitmap.getHeight();
+        
+        // Convert to pixel array
+        int[] pixels = new int[width * height];
+        maskBitmap.getPixels(pixels, 0, width, 0, 0, width, height);
+        
+        // Create visited array and component labels
+        boolean[] visited = new boolean[width * height];
+        int[] componentLabels = new int[width * height];
+        int currentLabel = 1;
+        int maxComponentSize = 0;
+        int maxComponentLabel = 0;
+        
+        // Find all connected components using flood fill
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int index = y * width + x;
+                
+                // If pixel is part of segmentation (not transparent) and not visited
+                if (pixels[index] != Color.TRANSPARENT && !visited[index]) {
+                    int componentSize = floodFill(pixels, visited, componentLabels, 
+                                                x, y, width, height, currentLabel);
+                    
+                    // Track largest component
+                    if (componentSize > maxComponentSize) {
+                        maxComponentSize = componentSize;
+                        maxComponentLabel = currentLabel;
+                    }
+                    currentLabel++;
+                }
+            }
+        }
+        
+        // Create new mask with only the largest component
+        int[] resultPixels = new int[width * height];
+        for (int i = 0; i < width * height; i++) {
+            if (componentLabels[i] == maxComponentLabel) {
+                resultPixels[i] = pixels[i]; // Keep original color
+            } else {
+                resultPixels[i] = Color.TRANSPARENT; // Remove other components
+            }
+        }
+        
+        // Create result bitmap
+        Bitmap resultBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+        resultBitmap.setPixels(resultPixels, 0, width, 0, 0, width, height);
+        
+        return resultBitmap;
+    }
+    
+    /**
+     * Flood fill algorithm to find connected component
+     * @return Size of the connected component
+     */
+    private int floodFill(int[] pixels, boolean[] visited, int[] componentLabels,
+                         int startX, int startY, int width, int height, int label) {
+        int componentSize = 0;
+        int targetColor = pixels[startY * width + startX];
+        
+        // Use stack for iterative flood fill (more memory efficient than recursion)
+        java.util.Stack<int[]> stack = new java.util.Stack<>();
+        stack.push(new int[]{startX, startY});
+        
+        while (!stack.isEmpty()) {
+            int[] point = stack.pop();
+            int x = point[0];
+            int y = point[1];
+            int index = y * width + x;
+            
+            // Check bounds and conditions
+            if (x < 0 || x >= width || y < 0 || y >= height || 
+                visited[index] || pixels[index] != targetColor) {
+                continue;
+            }
+            
+            // Mark as visited and label
+            visited[index] = true;
+            componentLabels[index] = label;
+            componentSize++;
+            
+            // Add neighbors to stack (4-connected)
+            stack.push(new int[]{x + 1, y});
+            stack.push(new int[]{x - 1, y});
+            stack.push(new int[]{x, y + 1});
+            stack.push(new int[]{x, y - 1});
+        }
+        
+        return componentSize;
+    }
+    
     public Bitmap processImage(Bitmap originalBitmap) {
         if (!modelLoaded) {
             try {
@@ -258,8 +355,11 @@ public class UltrasoundModelProcessor {
         // Convert labels -> mask Bitmap (label 0 -> transparent)
         Bitmap maskBitmap = maskFromArgmaxOutput(labels, outputShape);
         
+        // Extract largest connected component to remove noise
+        Bitmap cleanedMaskBitmap = extractLargestComponent(maskBitmap);
+        
         // Scale mask to cropped image size first
-        Bitmap scaledMaskBitmap = Bitmap.createScaledBitmap(maskBitmap, croppedBitmap.getWidth(), croppedBitmap.getHeight(), true);
+        Bitmap scaledMaskBitmap = Bitmap.createScaledBitmap(cleanedMaskBitmap, croppedBitmap.getWidth(), croppedBitmap.getHeight(), true);
         
         // Pad the mask back to original image size using crop coordinates
         Bitmap paddedMaskBitmap = padMaskToOriginalSize(scaledMaskBitmap, cropCoords);
