@@ -195,10 +195,22 @@ public class FirstFragment extends Fragment {
     }
 
     private void doCapture() {
-        if (castBinder == null) {
+        if (castBinder == null || timestamp == 0L) {
             return;
         }
-        // Save both original image and mask-only segmentation, if available
+        // 1) Trigger a capture on the Clarius app (as before)
+        showMessage("Starting image capture");
+        castBinder.getCast().startCapture(timestamp, captureID -> {
+            Log.d(TAG, "Start capture got ID: " + captureID);
+            if (captureID < 0) {
+                return;
+            }
+            castBinder.getCast().finishCapture(captureID, result -> {
+                Log.d(TAG, "Finish capture got result: " + result);
+            });
+        });
+
+        // 2) Also save both original image and mask-only segmentation locally (in this app)
         Bitmap mask = castBinder.getLastMask();
         Bitmap original = castBinder.getLastOriginal();
         String ts = java.time.LocalDateTime.now().format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd_HH-mm-ss"));
