@@ -40,7 +40,7 @@ public class UltrasoundModelProcessor {
     private static final int MODEL_INPUT_WIDTH = 256;
     private static final int MODEL_INPUT_HEIGHT = 256;
     // Overlay Configuration
-    private static final int MASK_COLOR = Color.argb(128, 255, 255, 0); // Semi-transparent yellow
+    private static final int MASK_COLOR = Color.argb(255, 255, 255, 0); // Brighter semi-transparent yellow
     private static final String TAG = "UltrasoundModelProcessor";
     private final Context context;
     private String modelPath;
@@ -276,6 +276,99 @@ public class UltrasoundModelProcessor {
         return componentSize;
     }
     
+    /**
+     * Extract contour of the largest connected component efficiently
+     * @param maskBitmap Input segmentation mask
+     * @return Contour-only mask bitmap
+     */
+    private Bitmap extractContour(Bitmap maskBitmap) {
+        int width = maskBitmap.getWidth();
+        int height = maskBitmap.getHeight();
+        
+        // Convert to pixel array
+        int[] pixels = new int[width * height];
+        maskBitmap.getPixels(pixels, 0, width, 0, 0, width, height);
+        
+        // Create visited array and component labels
+        boolean[] visited = new boolean[width * height];
+        int[] componentLabels = new int[width * height];
+        int currentLabel = 1;
+        int maxComponentSize = 0;
+        int maxComponentLabel = 0;
+        
+        // Find all connected components using flood fill
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int index = y * width + x;
+                
+                // If pixel is part of segmentation (not transparent) and not visited
+                if (pixels[index] != Color.TRANSPARENT && !visited[index]) {
+                    int componentSize = floodFill(pixels, visited, componentLabels, 
+                                                x, y, width, height, currentLabel);
+                    
+                    // Track largest component
+                    if (componentSize > maxComponentSize) {
+                        maxComponentSize = componentSize;
+                        maxComponentLabel = currentLabel;
+                    }
+                    currentLabel++;
+                }
+            }
+        }
+        
+        // Create contour mask - only edge pixels of the largest component
+        int[] contourPixels = new int[width * height];
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                int index = y * width + x;
+                
+                if (componentLabels[index] == maxComponentLabel) {
+                    // Check if this pixel is on the edge (has at least one non-component neighbor)
+                    boolean isEdge = false;
+                    int targetColor = pixels[index];
+                    
+                    // Check 4-connected neighbors
+                    for (int dy = -1; dy <= 1; dy += 2) {
+                        int ny = y + dy;
+                        if (ny >= 0 && ny < height) {
+                            int nIndex = ny * width + x;
+                            if (componentLabels[nIndex] != maxComponentLabel || pixels[nIndex] != targetColor) {
+                                isEdge = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!isEdge) {
+                        for (int dx = -1; dx <= 1; dx += 2) {
+                            int nx = x + dx;
+                            if (nx >= 0 && nx < width) {
+                                int nIndex = y * width + nx;
+                                if (componentLabels[nIndex] != maxComponentLabel || pixels[nIndex] != targetColor) {
+                                    isEdge = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    
+                    if (isEdge) {
+                        contourPixels[index] = targetColor; // Keep original color for edge
+                    } else {
+                        contourPixels[index] = Color.TRANSPARENT; // Remove interior
+                    }
+                } else {
+                    contourPixels[index] = Color.TRANSPARENT; // Remove other components
+                }
+            }
+        }
+        
+        // Create result bitmap
+        Bitmap resultBitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+        resultBitmap.setPixels(contourPixels, 0, width, 0, 0, width, height);
+        
+        return resultBitmap;
+    }
+    
     public Bitmap processImage(Bitmap originalBitmap) {
         if (!modelLoaded) {
             try {
@@ -362,19 +455,28 @@ public class UltrasoundModelProcessor {
         // Convert labels -> mask Bitmap (label 0 -> transparent)
         Bitmap maskBitmap = maskFromArgmaxOutput(labels, outputShape);
         
-        // Extract largest connected component to remove noise
+        // Extract largest connected component from the mask
         Bitmap cleanedMaskBitmap = extractLargestComponent(maskBitmap);
         
-        // Scale mask to cropped image size first
-        Bitmap scaledMaskBitmap = Bitmap.createScaledBitmap(cleanedMaskBitmap, croppedBitmap.getWidth(), croppedBitmap.getHeight(), true);
+        // Scale cleaned mask to cropped image size first
+        Bitmap scaledCleanedMaskBitmap = Bitmap.createScaledBitmap(cleanedMaskBitmap, croppedBitmap.getWidth(), croppedBitmap.getHeight(), true);
         
-        // Pad the mask back to original image size using crop coordinates
-        Bitmap paddedMaskBitmap = padMaskToOriginalSize(scaledMaskBitmap, cropCoords);
-        // Cache last padded mask for saving if needed
-        lastPaddedMaskBitmap = paddedMaskBitmap;
+        // Pad the cleaned mask back to original image size using crop coordinates
+        Bitmap paddedCleanedMaskBitmap = padMaskToOriginalSize(scaledCleanedMaskBitmap, cropCoords);
+        // Cache last padded cleaned mask for saving
+        lastPaddedMaskBitmap = paddedCleanedMaskBitmap;
         
-        // Overlay the padded mask on the original image
-        Bitmap finalBitmap = overlaySegmentation(originalBitmap, paddedMaskBitmap);
+        // Extract contour of largest connected component for display only
+        Bitmap contourBitmap = extractContour(cleanedMaskBitmap);
+        
+        // Scale contour to cropped image size
+        Bitmap scaledContourBitmap = Bitmap.createScaledBitmap(contourBitmap, croppedBitmap.getWidth(), croppedBitmap.getHeight(), true);
+        
+        // Pad the contour back to original image size using crop coordinates
+        Bitmap paddedContourBitmap = padMaskToOriginalSize(scaledContourBitmap, cropCoords);
+        
+        // Overlay the padded contour on the original image
+        Bitmap finalBitmap = overlaySegmentation(originalBitmap, paddedContourBitmap);
         if (debugImageCounter % SAVE_DEBUG_INTERVAL == 0) {
             saveDebugImage(finalBitmap, "output");
         }
